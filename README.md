@@ -20,6 +20,12 @@ wechat-db-export \
   --end 2025-02-01
 ```
 
+如果希望从源代码目录直接调用模块，也可以使用：
+
+```bash
+PYTHONPATH=src python -m wechat_db_parser.cli --help
+```
+
 参数说明：
 
 - `--data-dir`：指向解密后 MSG 数据目录（例如 Windows 客户端导出的 `Msg/`）。
