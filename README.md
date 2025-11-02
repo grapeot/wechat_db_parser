@@ -4,8 +4,7 @@
 
 ## 环境准备
 
-- 推荐使用 Python 3.9 运行本项目；仓库中的 `venv/` 由 `uv` 创建，并在 `.python-version` 中标注了版本。
-- 初次使用时执行 `uv venv venv && source venv/bin/activate` 创建并激活虚拟环境（仓库已包含 `venv/` 目录占位，建议根据自己的系统重新创建）。
+- 初次使用时执行 `uv venv venv && source venv/bin/activate` 创建并激活虚拟环境
 - 激活环境后安装依赖：`uv pip install -e .`
 
 ## 基本用法
