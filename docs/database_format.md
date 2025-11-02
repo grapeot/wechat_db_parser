@@ -84,6 +84,22 @@ wechat_db_parser/
 
 > 注意：FTS 数据库使用微信自定义 tokenizer，无法直接用 FTS 查询，但 `_content`、`_MetaData` 表是普通表，可以直接读取。
 
+### 3.3 ChatRoomUser.db
+
+- `ChatRoomUser`：群成员关系表，`ChatRoomId` 与 `UserId` 均为整型外键。
+- `ChatRoomUserNameToId`：将整型 ID 映射回真实的 `UsrName`（可能是 `@chatroom` 或具体 `wxid`）。
+- 通过 `JOIN` 可拿到完整成员名单：
+
+  ```sql
+  SELECT chatroom.UsrName AS chatroom, user.UsrName AS member
+  FROM ChatRoomUser AS cru
+  JOIN ChatRoomUserNameToId AS chatroom ON chatroom.rowid = cru.ChatRoomId
+  JOIN ChatRoomUserNameToId AS user ON user.rowid = cru.UserId
+  WHERE chatroom.UsrName = '26389512912@chatroom';
+  ```
+
+- 实测在“AI生产力训练营”群聊中可得到 500 个成员条目。对比消息发送者，这些成员中有 104 个从未发言（见下文“群成员覆盖与沉默用户识别”）。和 `FTSChatroom15_*` 相比，`ChatRoomUser.db` 更完整，但仍可能缺少已退出或尚未同步的成员信息，需要结合业务校验。
+
 ## 4. 运行流程
 
 1. **初始化数据源**：`MessageDataSource` 构造时搜集所有 `MSG*.db` 路径。
@@ -96,7 +112,17 @@ wechat_db_parser/
 5. **写出 CSV**：按 talker 写入单独的文件，附带 `extras` JSON 字段。
 6. **并行/进度条**：若安装 `tqdm`，会显示导出进度；`ThreadPoolExecutor` 可提升多会话导出速度。
 
-## 5. 可扩展方向
+## 5. 群成员覆盖与沉默用户识别
+
+1. **提取成员全集**：使用上节所示 SQL 语句或等价的 Python 查询，得到目标群聊的所有成员 `wxid`。
+2. **统计发言者**：借助 `MessageDataSource.iter_messages(talker)` 获取全部消息，收集 `msg.sender`（忽略系统提示和 talker 自身）。
+3. **差集分析**：`silent = members - senders` 即为从未发言的成员。在“AI生产力训练营”样本中，500 名成员中 415 名出现过发言，剩余 104 名成员（多为仅入群未发言）可用于后续的运营分析或清理策略。
+4. **注意事项**：
+   - 个别消息的 `sender` 字段可能缺失（例如某些系统通知），需要跳过空值。
+   - 若 `FTSContact.db` 缺少对应条目，可直接使用 `wxid` 作为显示名，或额外查询 `NameToId` / 其他联系人库补全。
+   - 若要统计“有发言但已退群”的成员，需要叠加时间维度比对群成员历史（目前 `ChatRoomUser.db` 仅代表当前快照）。
+
+## 6. 可扩展方向
 
 1. **支持 v4 数据库**：`message_*.db`、`contact.db` 结构不同，需要新增 datasource 实现并根据版本切换。
 2. **媒体导出**：解析 `HardLinkImage.db`、`HardLinkVideo.db`、`MediaMSG*.db`，将图片/视频复制到输出目录。
@@ -105,7 +131,7 @@ wechat_db_parser/
 5. **HTTP/GUI 封装**：在 CLI 基础上提供简易 Web 服务或图形界面。
 6. **多格式导出**：未来可新增 JSON/Parquet/SQLite 等格式，或直接生成统计报表。
 
-## 6. 重建步骤速览
+## 7. 重建步骤速览
 
 1. 安装依赖：`pip install lz4 protobuf tqdm`。
 2. 创建与本文一致的目录结构，将源码放入 `wechat_db_parser/src/wechat_db_parser/`。
@@ -123,7 +149,7 @@ PYTHONPATH=wechat_db_parser/src python -m wechat_db_parser.cli \
   --limit 10
 ```
 
-## 7. 注意事项
+## 8. 注意事项
 
 - 大规模导出时建议关闭 `--limit`，并适当调整 `--workers`。
 - 若联系人数据库缺失，输出中的 `talker_display` / `sender_display` 会退化为 `wxid`。
