@@ -5,3 +5,4 @@ __pycache__/
 .cursor/
 *.egg-info/
 Msg/
+output/
