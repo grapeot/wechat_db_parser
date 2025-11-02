@@ -1,0 +1,20 @@
+[project]
+name = "wechat-db-parser"
+version = "0.1.0"
+description = "Utilities for exporting WeChat conversations from decrypted databases."
+authors = [
+  { name = "ChatGPT" }
+]
+requires-python = ">=3.9"
+dependencies = [
+  "lz4",
+  "protobuf",
+  "tqdm"
+]
+
+[build-system]
+requires = ["setuptools>=62", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+wechat-db-export = "wechat_db_parser.cli:main"
