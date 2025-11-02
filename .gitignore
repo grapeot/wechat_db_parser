@@ -3,3 +3,5 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .cursor/
+*.egg-info/
+Msg/

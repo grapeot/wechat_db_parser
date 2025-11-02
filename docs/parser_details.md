@@ -1,6 +1,6 @@
 # 微信解密数据库解析详解
 
-本文将完整说明 `wechat_msg_parser` 项目的设计理念、关键数据表结构、消息解析流程以及扩展方向，目标是让任何工程师或 AI 助手仅凭本文即可重建当前工具并继续拓展功能。
+本文将完整说明 `wechat_db_parser` 项目的设计理念、关键数据表结构、消息解析流程以及扩展方向，目标是让任何工程师或 AI 助手仅凭本文即可重建当前工具并继续拓展功能。
 
 ## 1. 目录结构与输入假设
 
@@ -21,7 +21,7 @@
 ## 2. 核心模块概览
 
 ```
-wechat_msg_parser/
+wechat_db_parser/
 ├─ datasource.py     # 读取 MSG*.db、枚举会话、迭代消息
 ├─ contacts.py       # 解析 FTSContact.db，提取联系人/群昵称
 ├─ parser.py         # BytesExtra/LZ4 解析、消息对象构建
@@ -108,15 +108,15 @@ wechat_msg_parser/
 ## 6. 重建步骤速览
 
 1. 安装依赖：`pip install lz4 protobuf tqdm`。
-2. 创建与本文一致的目录结构，将源码放入 `wechat_msg_parser/src/wechat_msg_parser/`。
-3. 设置 `PYTHONPATH=wechat_msg_parser/src`，使用 `python -m wechat_msg_parser.cli` 执行。
+2. 创建与本文一致的目录结构，将源码放入 `wechat_db_parser/src/wechat_db_parser/`。
+3. 设置 `PYTHONPATH=wechat_db_parser/src`，使用 `python -m wechat_db_parser.cli` 执行。
 4. 传入解密目录与输出目录，使用 `--limit` 做小规模测试。
 
 示例：
 
 ```bash
 source venv/bin/activate
-PYTHONPATH=wechat_msg_parser/src python -m wechat_msg_parser.cli \
+PYTHONPATH=wechat_db_parser/src python -m wechat_db_parser.cli \
   --data-dir Msg \
   --output out \
   --talkers 原ZWO天文摄影③群（元老群） \
@@ -132,4 +132,4 @@ PYTHONPATH=wechat_msg_parser/src python -m wechat_msg_parser.cli \
 
 ---
 
-通过上述说明，读者可完整理解 `wechat_msg_parser` 的解析逻辑，并在此基础上实现新的功能或迁移到其他语言/平台。
+通过上述说明，读者可完整理解 `wechat_db_parser` 的解析逻辑，并在此基础上实现新的功能或迁移到其他语言/平台。

@@ -8,7 +8,7 @@
 
 ## 功能分层设计
 
-1. **数据访问层 (`wechat_msg_parser.datasource`)**
+1. **数据访问层 (`wechat_db_parser.datasource`)**
    - 负责定位并读取各类 SQLite 数据库：
      - 消息库：`MSG*.db` / `Multi/MSG*.db`（Windows v3）或 `message_*.db`（v4）。
      - 联系人库：`FTSContact.db`。
@@ -16,17 +16,17 @@
    - 抽象出统一的迭代接口（按 talker/timestamp 过滤）。
    - 支持资源管理（连接池或懒加载）。
 
-2. **模型与解析层 (`wechat_msg_parser.model`)**
+2. **模型与解析层 (`wechat_db_parser.model`)**
    - 消息对象：包含时间、talker、sender、内容、多媒体元数据等。
    - 联系人/群成员对象：封装显示名、别名、备注。
    - Proto/LZ4/Zstd 解析工具：复用现有 `BytesExtra`、`PackedInfo` 解析器，封装成纯 Python 函数。
 
-3. **业务逻辑层 (`wechat_msg_parser.service`)**
+3. **业务逻辑层 (`wechat_db_parser.service`)**
    - 组合数据访问与模型，完成消息补充（显示名、媒体路径）。
    - 提供批量导出方法：按 talker 聚合，返回统一的数据结构。
    - 并行能力：基于 `concurrent.futures` 或 `multiprocessing`，支持多 talker 并行导出。
 
-4. **CLI 层 (`wechat_msg_parser.__main__` 或 `wechat_msg_parser.cli`)**
+4. **CLI 层 (`wechat_db_parser.__main__` 或 `wechat_db_parser.cli`)**
    - 参数：
      - `--data-dir`：解密目录根路径。
      - `--output`：导出目录。
@@ -39,11 +39,11 @@
 ## 目录结构草案
 
 ```
-wechat_msg_parser/
+wechat_db_parser/
   docs/
     design.md
   src/
-    wechat_msg_parser/
+    wechat_db_parser/
       __init__.py
       datasource.py
       model.py
