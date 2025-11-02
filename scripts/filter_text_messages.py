@@ -12,6 +12,11 @@ The original export混杂了进群提示、系统通知、媒体占位等噪声�
 2. 将“昵称(wxid)”切分成易于聚合的 `sender_nickname` / `sender_id`；
 3. 去掉空白内容行，便于直接喂给 Pandas / Notebook 等分析工具。
 
+现在已经确认群内 `sender_id` 不存在多昵称冲突，因此导出的列压缩为：
+
+- `sender_nickname`
+- `content`
+
 运行本脚本即可从原始 CSV 生成一个轻量的 text-only CSV，为后续分析打好基础。
 """
 
@@ -47,7 +52,7 @@ def filter_text_messages(input_path: Path, output_path: Path) -> None:
     ) as dest:
         reader = csv.DictReader(src)
         writer = csv.writer(dest)
-        writer.writerow(["sender_nickname", "sender_id", "content"])
+        writer.writerow(["sender_nickname", "content"])
 
         for row in reader:
             if row.get("message_type") != "1":
@@ -58,7 +63,7 @@ def filter_text_messages(input_path: Path, output_path: Path) -> None:
             if not content:
                 continue
 
-            writer.writerow([nickname, identifier, content])
+            writer.writerow([nickname, content])
 
 
 def main() -> None:
