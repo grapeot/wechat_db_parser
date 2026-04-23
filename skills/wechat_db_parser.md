@@ -33,6 +33,11 @@ wechat-db-export official-articles \
   --output /tmp/wechat_official_articles.csv
 ```
 
+当前数据源有两层：
+
+- 最新更新：`MicroMsg.db / BizSessionNewFeeds`
+- 历史 fallback：`PublicMsg.db / PublicNameToID`
+
 ### 按公众号过滤
 
 ```bash
@@ -50,8 +55,9 @@ grep "关键词" /tmp/wechat_official_articles.csv
 
 ## 任务边界
 
-- 当前公众号文章导出只依赖已验证的 `PublicMsg` 和 `PublicNameToID`
-- 当前文章 subtype 只覆盖已观察到的 `0` 和 `5`
+- 当前最新公众号更新主要来自 `MicroMsg.db / BizSessionNewFeeds`
+- `BizProfileV2` 当前只做保守使用：补充账号 ID，并尽量提取一个 `mp.weixin` 链接
+- `PublicMsg` 和 `PublicNameToID` 保留为历史 fallback
 - 不修改 raw DB，不写回 `Msg/`
 
 ## 遇到问题时先看哪里

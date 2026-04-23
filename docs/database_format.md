@@ -52,7 +52,7 @@ wechat_db_parser/
   - `_discover_message_dbs`：在 `<DATA_DIR>` 和 `<DATA_DIR>/Msg`、以及各自的 `Multi/` 目录中搜索 `MSG*.db`。
   - `list_talkers`：遍历所有消息库，从 `Name2ID`/`Name2ID_v1` 表中收集会话标识（群聊 ID 或微信号）。
   - `iter_messages`：针对某个 `talker` 按时间范围、上限条数读取消息，跨多个数据库聚合后排序。
-- `PublicArticleDataSource`：读取 `PublicMsg.db` 中的公众号文章卡片，并结合 `PublicNameToID` 输出公众号名称与账号 ID。
+- `PublicArticleDataSource`：优先读取 `MicroMsg.db / BizSessionNewFeeds` 的当前订阅流，并通过 `BizProfileV2` 补充账号信息；必要时回退到 `PublicMsg.db`。
 
 ### 2.4 联系人与群昵称（`contacts.py`）
 
@@ -66,14 +66,47 @@ wechat_db_parser/
   - `--talkers` 参数既可写微信 ID，也可写备注/昵称，内部通过 `ContactDisplay` 反解成真实 ID。
   - 自动创建输出目录，文件命名为 `群名(微信ID)__哈希.csv`，避免重名。
   - CSV 字段：`timestamp`, `talker_display`, `talker_id`, `sender_display`, `sender_id`, `message_type`, `message_subtype`, `content`, `raw_content`, `extras(JSON)`。
-- `export_public_articles`：将 `PublicMsg.db` 中的公众号文章卡片导出为统一 CSV。
+- `export_public_articles`：优先导出 `MicroMsg.db / BizSessionNewFeeds` 中的当前订阅流；必要时回退到 `PublicMsg.db` 的历史卡片。
 - CLI (`cli.py`) 提供 `conversations` 与 `official-articles` 两个子命令，以及统一的时间格式兼容与错误提示。
 
-### 3.4 PublicMsg.db
+### 3.0 MicroMsg.db（当前公众号订阅流）
 
-- `PublicMsg`：公众号文章卡片消息。当前实现只处理已验证的 type 49 / subtype `{0, 5}`。
-- `PublicNameToID`：公众号标识与名称映射。
-- 当前公众号文章导出只依赖这两张已验证的表结构。
+从本地数据看，`PublicMsg.db` 在 2026-03-19 之后不再持续写入新的公众号文章卡片。当前最新的公众号更新主要来自 `MicroMsg.db` 的两张表：
+
+- `BizSessionNewFeeds`：每个公众号最近一条更新，适合做今天有什么新文章的扫描
+- `BizProfileV2`：每个公众号一条 profile/feed cache，`RespData` 是 protobuf blob，里面包含最近多篇文章
+
+这两张表通过 `TalkerId` 一对一 join。
+
+### 3.0.1 BizSessionNewFeeds
+
+- `TalkerId`：整型主键，可 join 到 `BizProfileV2.TalkerId`
+- `BizName`：公众号 ID，常见为 `gh_*` 或其他平台内部标识
+- `Title`：公众号名称
+- `Desc`：最新文章标题
+- `Type`：当前活跃文章推送为 `49`
+- `UnreadCount`：未读数，活跃行通常为 1
+- `UpdateTime` / `CreateTime`：最近推送时间
+- `BizAttrVersion`：版本号，每次刷新会增长
+
+### 3.0.2 BizProfileV2
+
+- `TalkerId`：整型主键
+- `UserName`：公众号 ID
+- `ArticleCount`：账号累计文章数
+- `IsSubscribed`：当前是否订阅
+- `TimeStamp`：profile/feed 缓存更新时间
+- `RespData`：protobuf blob，包含最近多篇文章的缓存结果
+- `Offset` / `IsEnd`：分页游标相关字段
+
+当前实现对 `RespData` 只做保守使用：补充账号 ID，并尽量提取一个 `mp.weixin` 链接。更完整的多篇文章解码留给后续版本。
+
+### 3.4 PublicMsg.db（旧公众号文章链路）
+
+- `PublicMsg`：旧的公众号文章卡片记录
+- `PublicNameToID`：公众号 ID 与名称映射
+- 当前观测下，这条链路在本地数据里主要覆盖到 2026-03-19 左右
+- 当前代码把这条链路保留为 fallback，便于导出更早时间段的历史文章
 
 ## 3. 关键数据表说明
 
@@ -123,6 +156,14 @@ wechat_db_parser/
 5. **写出 CSV**：按 talker 写入单独的文件，附带 `extras` JSON 字段。
 6. **并行/进度条**：若安装 `tqdm`，会显示导出进度；`ThreadPoolExecutor` 可提升多会话导出速度。
 
+### 4.1 当前公众号导出流程
+
+1. 优先检查 `MicroMsg.db` 是否存在，且是否包含 `BizSessionNewFeeds`
+2. 若存在，优先从 `BizSessionNewFeeds` 读取最近文章更新
+3. 通过 `TalkerId` join `BizProfileV2`，补充 `UserName` 和 `RespData`
+4. 将 `BizSessionNewFeeds.Title` 视为公众号名称，`Desc` 视为最新文章标题，`UpdateTime` 视为时间戳
+5. 若当前订阅流无结果，再回退到 `PublicMsg.db` 的旧文章卡片链路
+
 ## 5. 群成员覆盖与沉默用户识别
 
 1. **提取成员全集**：使用上节所示 SQL 语句或等价的 Python 查询，得到目标群聊的所有成员 `wxid`。
@@ -137,7 +178,7 @@ wechat_db_parser/
 
 1. **支持 v4 数据库**：`message_*.db`、`contact.db` 结构不同，需要新增 datasource 实现并根据版本切换。
 2. **媒体导出**：解析 `HardLinkImage.db`、`HardLinkVideo.db`、`MediaMSG*.db`，将图片/视频复制到输出目录。
-3. **索引缓存**：为大型数据库构建 FTS 或倒排索引，提供按关键词检索功能。
+3. **BizProfileV2 深度解码**：把 `RespData` 中最近多篇文章完整解出来，而不是只用 `BizSessionNewFeeds` 的最新一篇。
 4. **增量更新**：比较数据库 fingerprint，仅导出新增消息。
 5. **HTTP/GUI 封装**：在 CLI 基础上提供简易 Web 服务或图形界面。
 6. **多格式导出**：未来可新增 JSON/Parquet/SQLite 等格式，或直接生成统计报表。

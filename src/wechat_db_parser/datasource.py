@@ -12,6 +12,7 @@ from .parser import build_message, decode_message_content
 
 MESSAGE_DB_PATTERNS = ("MSG*.db",)
 MULTI_DIR_NAME = "Multi"
+MICRO_MSG_DB_NAME = "MicroMsg.db"
 PUBLIC_MSG_DB_NAME = "PublicMsg.db"
 PUBLIC_ARTICLE_SUBTYPES = (0, 5)
 PUBLIC_ACCOUNT_ID_COLUMNS = ("UsrName", "userName", "UserName", "Alias")
@@ -128,10 +129,12 @@ class MessageDataSource:
 class PublicArticleDataSource:
     def __init__(self, data_dir: Path):
         self.data_dir = Path(data_dir)
-        public_msg_db = _discover_named_db(self.data_dir, PUBLIC_MSG_DB_NAME)
-        if public_msg_db is None:
-            raise FileNotFoundError(f"No {PUBLIC_MSG_DB_NAME} found under {self.data_dir}")
-        self.public_msg_db = public_msg_db
+        self.micro_msg_db = _discover_named_db(self.data_dir, MICRO_MSG_DB_NAME)
+        self.public_msg_db = _discover_named_db(self.data_dir, PUBLIC_MSG_DB_NAME)
+        if self.micro_msg_db is None and self.public_msg_db is None:
+            raise FileNotFoundError(
+                f"No {MICRO_MSG_DB_NAME} or {PUBLIC_MSG_DB_NAME} found under {self.data_dir}"
+            )
 
     def iter_articles(
         self,
@@ -140,15 +143,86 @@ class PublicArticleDataSource:
         end: Optional[datetime] = None,
         limit: Optional[int] = None,
     ) -> List[OfficialAccountArticle]:
+        if self.micro_msg_db is not None:
+            articles = self._iter_biz_feed_articles(accounts=accounts, start=start, end=end, limit=limit)
+            if articles:
+                return articles
+
+        if self.public_msg_db is None:
+            return []
+
+        return self._iter_public_msg_articles(accounts=accounts, start=start, end=end, limit=limit)
+
+    def _iter_biz_feed_articles(
+        self,
+        accounts: Optional[Sequence[str]] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: Optional[int] = None,
+    ) -> List[OfficialAccountArticle]:
+        micro_msg_db = self.micro_msg_db
+        if micro_msg_db is None:
+            return []
         start_ts = int(start.timestamp()) if start else None
         end_ts = int(end.timestamp()) if end else None
 
-        with sqlite3.connect(self.public_msg_db) as conn:
+        with sqlite3.connect(micro_msg_db) as conn:
+            conn.row_factory = sqlite3.Row
+            if not _table_exists(conn, "BizSessionNewFeeds"):
+                return []
+
+            profile_rows = self._load_biz_profile_rows(conn)
+            account_mapping = self._build_biz_account_mapping(conn, profile_rows)
+            resolved_accounts = _resolve_public_account_inputs(accounts, account_mapping)
+            allowed_refs = {str(ref) for ref in resolved_accounts} if resolved_accounts else None
+
+            query = (
+                "SELECT TalkerId, BizName, Title, Desc, Type, UnreadCount, UpdateTime, CreateTime, BizAttrVersion "
+                "FROM BizSessionNewFeeds WHERE Type = 49"
+            )
+            params: List[object] = []
+            if start_ts is not None:
+                query += " AND UpdateTime >= ?"
+                params.append(start_ts)
+            if end_ts is not None:
+                query += " AND UpdateTime <= ?"
+                params.append(end_ts)
+            query += " ORDER BY UpdateTime ASC"
+            rows = conn.execute(query, params).fetchall()
+
+        articles: List[OfficialAccountArticle] = []
+        for row in rows:
+            account_ref = str(row["TalkerId"])
+            if allowed_refs is not None and account_ref not in allowed_refs:
+                continue
+            article = _build_biz_feed_article(row, account_mapping, profile_rows)
+            if article is None:
+                continue
+            articles.append(article)
+            if limit is not None and len(articles) >= limit:
+                break
+        return articles
+
+    def _iter_public_msg_articles(
+        self,
+        accounts: Optional[Sequence[str]] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: Optional[int] = None,
+    ) -> List[OfficialAccountArticle]:
+        public_msg_db = self.public_msg_db
+        if public_msg_db is None:
+            return []
+
+        start_ts = int(start.timestamp()) if start else None
+        end_ts = int(end.timestamp()) if end else None
+
+        with sqlite3.connect(public_msg_db) as conn:
             conn.row_factory = sqlite3.Row
             if not _table_exists(conn, "PublicMsg"):
-                raise ValueError(f"PublicMsg table not found in {self.public_msg_db}")
+                raise ValueError(f"PublicMsg table not found in {public_msg_db}")
 
-            account_mapping = self._load_account_mapping(conn)
+            account_mapping = self._load_public_account_mapping(conn)
             public_msg_columns = set(_table_columns(conn, "PublicMsg"))
             talker_column = _pick_column(public_msg_columns, ("TalkerId", "TalkerID", "PublicTalkerId", "PublicID", "StrTalker"))
             create_time_column = _pick_column(public_msg_columns, ("CreateTime",))
@@ -204,10 +278,13 @@ class PublicArticleDataSource:
                 break
         return articles
 
-    def _load_account_mapping(self, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Tuple[str, str]]:
+    def _load_public_account_mapping(self, conn: Optional[sqlite3.Connection] = None) -> Dict[str, Tuple[str, str]]:
         should_close = conn is None
         if conn is None:
-            conn = sqlite3.connect(self.public_msg_db)
+            public_msg_db = self.public_msg_db
+            if public_msg_db is None:
+                return {}
+            conn = sqlite3.connect(public_msg_db)
             conn.row_factory = sqlite3.Row
         try:
             if not _table_exists(conn, "PublicNameToID"):
@@ -223,6 +300,29 @@ class PublicArticleDataSource:
         finally:
             if should_close and conn is not None:
                 conn.close()
+
+    def _load_biz_profile_rows(self, conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
+        if not _table_exists(conn, "BizProfileV2"):
+            return {}
+        rows = conn.execute(
+            "SELECT TalkerId, UserName, ArticleCount, FriendSubscribedCount, IsSubscribed, TimeStamp, RespData FROM BizProfileV2"
+        ).fetchall()
+        return {str(row["TalkerId"]): dict(row) for row in rows}
+
+    def _build_biz_account_mapping(
+        self,
+        conn: sqlite3.Connection,
+        profile_rows: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Tuple[str, str]]:
+        rows = conn.execute("SELECT TalkerId, BizName, Title FROM BizSessionNewFeeds").fetchall()
+        mapping: Dict[str, Tuple[str, str]] = {}
+        for row in rows:
+            talker_id = str(row["TalkerId"])
+            profile = profile_rows.get(talker_id, {})
+            account_id = str(profile.get("UserName") or row["BizName"] or talker_id).strip()
+            account_name = str(row["Title"] or account_id).strip()
+            mapping[talker_id] = (account_id, account_name)
+        return mapping
 
 
 def _db_sort_key(path: Path) -> tuple[int, int, str]:
@@ -300,6 +400,39 @@ def _resolve_public_account_inputs(
             raise ValueError(f"无法解析公众号标识：{item}")
         resolved.append(ref)
     return resolved
+
+
+def _extract_first_mp_url(blob: Optional[bytes]) -> str:
+    if not blob:
+        return ""
+    text = blob.decode("utf-8", errors="ignore")
+    match = re.search(r"http://mp\.weixin\.qq\.com/s\?__biz=[^\s\x00\x01-\x1f\"<>]+", text)
+    return match.group(0).strip() if match else ""
+
+
+def _build_biz_feed_article(
+    row: sqlite3.Row,
+    mapping: Dict[str, Tuple[str, str]],
+    profile_rows: Dict[str, Dict[str, Any]],
+) -> Optional[OfficialAccountArticle]:
+    account_ref = str(row["TalkerId"])
+    account_id, account_name = mapping.get(account_ref, (account_ref, account_ref))
+    title = str(row["Desc"] or "").strip()
+    if not title:
+        return None
+    profile = profile_rows.get(account_ref, {})
+    url = _extract_first_mp_url(profile.get("RespData"))
+    return OfficialAccountArticle(
+        timestamp=datetime.fromtimestamp(int(row["UpdateTime"] or 0)),
+        account_id=account_id,
+        account_name=account_name,
+        title=title,
+        url=url,
+        summary="",
+        msg_type=int(row["Type"] or 0),
+        sub_type=0,
+        raw_content="",
+    )
 
 
 def _build_official_account_article(

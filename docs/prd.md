@@ -16,9 +16,9 @@
 
 ### 2.2 公众号文章导出（`wechat-db-export official-articles`）
 
-- **能力**：从 `PublicMsg.db` 中提取公众号文章卡片并导出为统一 CSV
+- **能力**：优先从 `MicroMsg.db` 的当前订阅流提取公众号更新，必要时回退到 `PublicMsg.db` 的历史文章卡片，导出为统一 CSV
 - **参数**：`--data-dir`、`--output`、`--accounts`、`--start`、`--end`、`--limit`
-- **数据源**：`PublicMsg` + `PublicNameToID`
+- **数据源**：当前主源是 `MicroMsg.db / BizSessionNewFeeds`，并用 `BizProfileV2` 补充账号信息；旧数据回退到 `PublicMsg` + `PublicNameToID`
 - **输出字段**：`timestamp`、`account_name`、`account_id`、`title`、`url`、`summary`
 - **过滤能力**：支持按公众号名称或账号 ID 筛选
 
@@ -43,14 +43,14 @@
 | timestamp | 文章卡片消息时间 |
 | account_name / account_id | 公众号名称 / 账号 ID |
 | title | 文章标题 |
-| url | 文章链接 |
-| summary | 摘要或 description |
+| url | 文章链接。当前订阅流模式下为 best-effort 提取 |
+| summary | 摘要或 description。当前订阅流模式下可能为空 |
 
 ## 4. 使用场景
 
 1. 历史会话归档
 2. 按会话导出供后续分析
-3. 公众号历史文章卡片收集
+3. 公众号当前更新监控与历史文章卡片收集
 4. 面向 AI 或搜索系统的结构化预处理
 
 ## 5. 非目标

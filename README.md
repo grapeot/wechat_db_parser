@@ -25,7 +25,7 @@ wechat-db-export \
 
 ### 2. 公众号文章导出
 
-`official-articles` 从 `PublicMsg.db` 中导出公众号文章卡片，输出统一字段：`timestamp`、`account_name`、`account_id`、`title`、`url`、`summary`。
+`official-articles` 会优先从 `MicroMsg.db` 的 `BizSessionNewFeeds` 导出当前订阅流中的最新公众号更新；如果当前环境里只有旧数据，它会回退到 `PublicMsg.db` 的历史文章卡片。输出字段保持统一：`timestamp`、`account_name`、`account_id`、`title`、`url`、`summary`。
 
 ```bash
 wechat-db-export \
@@ -54,7 +54,7 @@ PYTHONPATH=src python -m wechat_db_parser.cli --help
 
 ### official-articles 参数说明
 
-- `--data-dir`：指向包含 `PublicMsg.db` 的解密目录，支持传根目录或 `Msg/`。
+- `--data-dir`：指向解密后的微信数据目录，支持传根目录或 `Msg/`。当前实现会优先查 `MicroMsg.db`，必要时回退到 `PublicMsg.db`。
 - `--output`：导出 CSV 的文件路径。
 - `--accounts`：可选，限定导出的公众号，支持账号 ID、名称或 `名称(账号ID)`。
 - `--start` / `--end`：可选，限制文章时间范围，接受 `YYYY-MM-DD` 或 `YYYY-MM-DDTHH:MM[:SS]` 格式。
@@ -79,4 +79,6 @@ cp skills/wechat_db_parser.md <local-skill-dir>/
 
 - 我们只针对微信 Windows PC 版 3.9 系列数据库进行测试，其他格式（含 v4、移动端等）尚未验证。
 - 数据库结构和加密方式随微信版本变动较大，请确保你拥有合法访问和处理这些数据的权利。
-- 公众号文章导出当前只依赖已验证的 `PublicMsg` 和 `PublicNameToID` 结构，并复用现有的 type-49 appmsg 解码逻辑。
+- 当前公众号最新订阅流主要来自 `MicroMsg.db / BizSessionNewFeeds`，并通过 `BizProfileV2` 补充账号 ID 与 blob 信息。
+- `PublicMsg.db / PublicNameToID` 仍然保留为历史 fallback，用于旧时间段或没有新订阅流数据的场景。
+- 对 `BizProfileV2.RespData`，当前只做保守使用：拿它补充账号信息，并尽量提取一个 `mp.weixin` 链接。更完整的多篇文章解析还需要后续单独处理。

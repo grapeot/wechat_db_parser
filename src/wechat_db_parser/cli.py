@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     conversations.add_argument("--workers", type=int, default=1, help="并行 worker 数（默认 1）")
     conversations.set_defaults(handler=_run_conversations)
 
-    official_articles = subparsers.add_parser("official-articles", help="从 PublicMsg.db 导出公众号文章卡片")
+    official_articles = subparsers.add_parser("official-articles", help="导出公众号文章，优先读取 MicroMsg.db 的最新订阅流")
     official_articles.add_argument("--data-dir", type=Path, required=True, help="解密后的数据目录，例如 Msg/")
     official_articles.add_argument("--output", type=Path, required=True, help="导出文章 CSV 的文件路径")
     official_articles.add_argument("--accounts", nargs="*", help="指定公众号 ID 或名称，默认导出全部")
