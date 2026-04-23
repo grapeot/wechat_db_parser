@@ -2,6 +2,8 @@
 
 本文将完整说明 `wechat_db_parser` 项目的设计理念、关键数据表结构、消息解析流程以及扩展方向，目标是让任何工程师或 AI 助手仅凭本文即可重建当前工具并继续拓展功能。
 
+当前 CLI 已采用统一入口 + subcommand 结构。会话导出使用 `wechat-db-export conversations`，公众号文章导出使用 `wechat-db-export official-articles`。
+
 ## 1. 目录结构与输入假设
 
 解密后的微信数据通常位于某个工作目录下，本文以 `<DATA_DIR>` 表示：
@@ -27,19 +29,20 @@ wechat_db_parser/
 ├─ parser.py         # BytesExtra/LZ4 解析、消息对象构建
 ├─ model.py          # 数据模型（消息、联系人显示名等）
 ├─ exporter.py       # 汇总、写出 CSV，支持并行与昵称反解
-└─ cli.py            # 命令行入口
+└─ cli.py            # 统一命令行入口（conversations / official-articles）
 ```
 
 ### 2.1 数据模型（`model.py`）
 
 - `Message`: 统一后的消息结构，包含时间、发言者、内容、原始文本、附加元数据等。
+- `OfficialAccountArticle`: 公众号文章卡片的归一化结构，包含账号、标题、链接与摘要。
 - `ContactDisplay`: 联系人显示元数据，支持 remark/alias/nickname 优先级。
 - `GroupMemberDisplay`: 群聊内成员的群昵称、别名。
 
 ### 2.2 消息解析（`parser.py`）
 
 1. `parse_bytes_extra`：手写 protobuf 解析器，用于解码 `BytesExtra` 字段（type=1 为真实发送者，type=3/4 为媒体路径）。
-2. `_decode_content`：当消息类型为 49 时使用 `lz4.block.decompress` 解压，解析 XML 并提取标题/摘要/链接。
+2. `decode_message_content`：当消息类型为 49 时使用 `lz4.block.decompress` 解压，解析 XML 并提取标题/摘要/链接。
 3. `build_message`：将一条数据库记录转换为 `Message` 对象，补齐语音/图片/视频路径信息。
 4. `annotate_messages`：结合联系人/群成员信息，为 `talker` 和 `sender` 填充可读的显示名。
 
@@ -49,6 +52,7 @@ wechat_db_parser/
   - `_discover_message_dbs`：在 `<DATA_DIR>` 和 `<DATA_DIR>/Msg`、以及各自的 `Multi/` 目录中搜索 `MSG*.db`。
   - `list_talkers`：遍历所有消息库，从 `Name2ID`/`Name2ID_v1` 表中收集会话标识（群聊 ID 或微信号）。
   - `iter_messages`：针对某个 `talker` 按时间范围、上限条数读取消息，跨多个数据库聚合后排序。
+- `PublicArticleDataSource`：读取 `PublicMsg.db` 中的公众号文章卡片，并结合 `PublicNameToID` 输出公众号名称与账号 ID。
 
 ### 2.4 联系人与群昵称（`contacts.py`）
 
@@ -62,7 +66,14 @@ wechat_db_parser/
   - `--talkers` 参数既可写微信 ID，也可写备注/昵称，内部通过 `ContactDisplay` 反解成真实 ID。
   - 自动创建输出目录，文件命名为 `群名(微信ID)__哈希.csv`，避免重名。
   - CSV 字段：`timestamp`, `talker_display`, `talker_id`, `sender_display`, `sender_id`, `message_type`, `message_subtype`, `content`, `raw_content`, `extras(JSON)`。
-- CLI (`cli.py`) 提供参数解析、时间格式兼容、错误提示。
+- `export_public_articles`：将 `PublicMsg.db` 中的公众号文章卡片导出为统一 CSV。
+- CLI (`cli.py`) 提供 `conversations` 与 `official-articles` 两个子命令，以及统一的时间格式兼容与错误提示。
+
+### 3.4 PublicMsg.db
+
+- `PublicMsg`：公众号文章卡片消息。当前实现只处理已验证的 type 49 / subtype `{0, 5}`。
+- `PublicNameToID`：公众号标识与名称映射。
+- 当前公众号文章导出只依赖这两张已验证的表结构。
 
 ## 3. 关键数据表说明
 
@@ -95,10 +106,10 @@ wechat_db_parser/
   FROM ChatRoomUser AS cru
   JOIN ChatRoomUserNameToId AS chatroom ON chatroom.rowid = cru.ChatRoomId
   JOIN ChatRoomUserNameToId AS user ON user.rowid = cru.UserId
-  WHERE chatroom.UsrName = '26389512912@chatroom';
+  WHERE chatroom.UsrName = '12345678@chatroom';
   ```
 
-- 实测在“AI生产力训练营”群聊中可得到 500 个成员条目。对比消息发送者，这些成员中有 104 个从未发言（见下文“群成员覆盖与沉默用户识别”）。和 `FTSChatroom15_*` 相比，`ChatRoomUser.db` 更完整，但仍可能缺少已退出或尚未同步的成员信息，需要结合业务校验。
+- 在一个中等规模群聊样本中，可以拿到完整的成员条目。对比消息发送者后，可以进一步识别从未发言的成员。和 `FTSChatroom15_*` 相比，`ChatRoomUser.db` 更完整，但仍可能缺少已退出或尚未同步的成员信息，需要结合业务校验。
 
 ## 4. 运行流程
 
@@ -116,7 +127,7 @@ wechat_db_parser/
 
 1. **提取成员全集**：使用上节所示 SQL 语句或等价的 Python 查询，得到目标群聊的所有成员 `wxid`。
 2. **统计发言者**：借助 `MessageDataSource.iter_messages(talker)` 获取全部消息，收集 `msg.sender`（忽略系统提示和 talker 自身）。
-3. **差集分析**：`silent = members - senders` 即为从未发言的成员。在“AI生产力训练营”样本中，500 名成员中 415 名出现过发言，剩余 104 名成员（多为仅入群未发言）可用于后续的运营分析或清理策略。
+3. **差集分析**：`silent = members - senders` 即为从未发言的成员。这个差集可用于后续的群成员活跃度分析。
 4. **注意事项**：
    - 个别消息的 `sender` 字段可能缺失（例如某些系统通知），需要跳过空值。
    - 若 `FTSContact.db` 缺少对应条目，可直接使用 `wxid` 作为显示名，或额外查询 `NameToId` / 其他联系人库补全。
@@ -133,19 +144,19 @@ wechat_db_parser/
 
 ## 7. 重建步骤速览
 
-1. 安装依赖：`pip install lz4 protobuf tqdm`。
+1. 安装依赖：`uv venv .venv && source .venv/bin/activate && uv pip install -e '.[dev]'`。
 2. 创建与本文一致的目录结构，将源码放入 `wechat_db_parser/src/wechat_db_parser/`。
-3. 设置 `PYTHONPATH=wechat_db_parser/src`，使用 `python -m wechat_db_parser.cli` 执行。
+3. 设置 `PYTHONPATH=wechat_db_parser/src`，使用 `python -m wechat_db_parser.cli conversations` 或 `python -m wechat_db_parser.cli official-articles` 执行。
 4. 传入解密目录与输出目录，使用 `--limit` 做小规模测试。
 
 示例：
 
 ```bash
-source venv/bin/activate
-PYTHONPATH=wechat_db_parser/src python -m wechat_db_parser.cli \
+source .venv/bin/activate
+PYTHONPATH=wechat_db_parser/src python -m wechat_db_parser.cli conversations \
   --data-dir Msg \
   --output out \
-  --talkers 原ZWO天文摄影③群（元老群） \
+  --talkers sample_group \
   --limit 10
 ```
 
