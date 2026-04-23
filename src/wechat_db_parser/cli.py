@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from .exporter import export_conversations, export_public_articles
+from .exporter import export_conversations, export_public_article_timeline, export_public_articles
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +31,16 @@ def build_parser() -> argparse.ArgumentParser:
     official_articles.add_argument("--end", type=str, help="结束时间")
     official_articles.add_argument("--limit", type=int, help="导出的最大文章数，用于调试")
     official_articles.set_defaults(handler=_run_official_articles)
+
+    official_articles_timeline = subparsers.add_parser("official-articles-timeline", help="Export a timeline of recent official account articles")
+    official_articles_timeline.add_argument("--data-dir", type=Path, required=True, help="Decrypted data directory, e.g. Msg/")
+    official_articles_timeline.add_argument("--output", type=Path, required=True, help="Output file path")
+    official_articles_timeline.add_argument("--accounts", nargs="*", help="Official account ID or display name")
+    official_articles_timeline.add_argument("--start", type=str, help="Start time, e.g. 2025-01-01 or 2025-01-01T12:00")
+    official_articles_timeline.add_argument("--end", type=str, help="End time")
+    official_articles_timeline.add_argument("--limit", type=int, help="Maximum number of exported articles")
+    official_articles_timeline.add_argument("--format", choices=["csv", "markdown"], default="csv", help="Output format")
+    official_articles_timeline.set_defaults(handler=_run_official_articles_timeline)
     return parser
 
 
@@ -82,6 +92,25 @@ def _run_official_articles(args: argparse.Namespace) -> int:
         return 1
 
     print(f"成功导出 {count} 条公众号文章 -> {output_path}")
+    return 0
+
+
+def _run_official_articles_timeline(args: argparse.Namespace) -> int:
+    count, output_path = export_public_article_timeline(
+        data_dir=args.data_dir,
+        output_path=args.output,
+        accounts=args.accounts,
+        start=parse_date(args.start),
+        end=parse_date(args.end),
+        limit=args.limit,
+        output_format=args.format,
+    )
+
+    if count <= 0:
+        print(f"No official account timeline articles exported. Empty file written to {output_path}")
+        return 1
+
+    print(f"Successfully exported {count} official account timeline articles -> {output_path}")
     return 0
 
 

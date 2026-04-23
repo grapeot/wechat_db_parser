@@ -2,10 +2,11 @@
 
 这个 skill 面向任务执行，而不是仓库开发说明。
 
-它覆盖两类常见任务：
+它覆盖三类常见任务：
 
 1. 导出聊天会话
 2. 导出公众号文章卡片
+3. 导出公众号最近多篇文章时间线
 
 ## 统一 CLI
 
@@ -38,6 +39,8 @@ wechat-db-export official-articles \
 - 最新更新：`MicroMsg.db / BizSessionNewFeeds`
 - 历史 fallback：`PublicMsg.db / PublicNameToID`
 
+如果你需要单个公众号最近多篇文章，而不是只有最近一条，可以使用 `official-articles-timeline`。
+
 ### 按公众号过滤
 
 ```bash
@@ -56,7 +59,7 @@ grep "关键词" /tmp/wechat_official_articles.csv
 ## 任务边界
 
 - 当前最新公众号更新主要来自 `MicroMsg.db / BizSessionNewFeeds`
-- `BizProfileV2` 当前只做保守使用：补充账号 ID，并尽量提取一个 `mp.weixin` 链接
+- `official-articles-timeline` 会解析 `BizProfileV2.RespData`，导出最近多篇文章的标题、链接、时间和封面图 URL
 - `PublicMsg` 和 `PublicNameToID` 保留为历史 fallback
 - 不修改 raw DB，不写回 `Msg/`
 

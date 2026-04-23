@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from .model import Message, OfficialAccountArticle
-from .parser import build_message, decode_message_content
+from .model import Message, OfficialAccountArticle, OfficialAccountTimelineArticle
+from .parser import build_message, decode_message_content, parse_biz_profile_resp_data
 
 MESSAGE_DB_PATTERNS = ("MSG*.db",)
 MULTI_DIR_NAME = "Multi"
@@ -152,6 +152,51 @@ class PublicArticleDataSource:
             return []
 
         return self._iter_public_msg_articles(accounts=accounts, start=start, end=end, limit=limit)
+
+    def iter_article_timeline(
+        self,
+        accounts: Optional[Sequence[str]] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: Optional[int] = None,
+    ) -> List[OfficialAccountTimelineArticle]:
+        micro_msg_db = self.micro_msg_db
+        if micro_msg_db is None:
+            return []
+
+        start_ts = int(start.timestamp()) if start else None
+        end_ts = int(end.timestamp()) if end else None
+        with sqlite3.connect(micro_msg_db) as conn:
+            conn.row_factory = sqlite3.Row
+            if not _table_exists(conn, "BizProfileV2"):
+                return []
+            profile_rows = self._load_biz_profile_rows(conn)
+            account_mapping = self._build_biz_account_mapping(conn, profile_rows)
+            resolved_accounts = _resolve_public_account_inputs(accounts, account_mapping)
+            allowed_refs = {str(ref) for ref in resolved_accounts} if resolved_accounts else None
+
+        timeline: List[OfficialAccountTimelineArticle] = []
+        for talker_id, profile in profile_rows.items():
+            if allowed_refs is not None and talker_id not in allowed_refs:
+                continue
+            account_id, account_name = account_mapping.get(talker_id, (talker_id, talker_id))
+            articles = parse_biz_profile_resp_data(
+                profile.get("RespData"),
+                account_id=account_id,
+                account_name=account_name,
+            )
+            for article in articles:
+                article_ts = int(article.timestamp.timestamp())
+                if start_ts is not None and article_ts < start_ts:
+                    continue
+                if end_ts is not None and article_ts > end_ts:
+                    continue
+                timeline.append(article)
+
+        timeline.sort(key=lambda article: (article.timestamp, article.account_id, article.article_index))
+        if limit is not None:
+            timeline = timeline[-limit:]
+        return timeline
 
     def _iter_biz_feed_articles(
         self,
@@ -407,7 +452,7 @@ def _extract_first_mp_url(blob: Optional[bytes]) -> str:
         return ""
     text = blob.decode("utf-8", errors="ignore")
     match = re.search(r"http://mp\.weixin\.qq\.com/s\?__biz=[^\s\x00\x01-\x1f\"<>]+", text)
-    return match.group(0).strip() if match else ""
+    return match.group(0).strip().rstrip(":;,)") if match else ""
 
 
 def _build_biz_feed_article(

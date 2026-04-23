@@ -22,6 +22,14 @@
 - **输出字段**：`timestamp`、`account_name`、`account_id`、`title`、`url`、`summary`
 - **过滤能力**：支持按公众号名称或账号 ID 筛选
 
+### 2.3 公众号文章时间线导出（`wechat-db-export official-articles-timeline`）
+
+- **能力**：从 `MicroMsg.db / BizProfileV2.RespData` 中解析每个公众号最近多篇文章，按文章级别导出时间线
+- **参数**：`--data-dir`、`--output`、`--accounts`、`--start`、`--end`、`--limit`、`--format`
+- **数据源**：`BizProfileV2.RespData` 为主，`BizSessionNewFeeds` 提供账号映射
+- **输出格式**：CSV 或 Markdown
+- **输出字段**：`timestamp`、`account_name`、`account_id`、`article_index`、`title`、`url`、`summary`、`cover_image_url`、`cover_thumb_url`、`source`
+
 ## 3. 输出格式
 
 ### 3.1 会话 CSV
@@ -46,11 +54,24 @@
 | url | 文章链接。当前订阅流模式下为 best-effort 提取 |
 | summary | 摘要或 description。当前订阅流模式下可能为空 |
 
+### 3.3 公众号文章时间线
+
+| 字段 | 说明 |
+|------|------|
+| timestamp | 文章级别时间戳 |
+| account_name / account_id | 公众号名称 / 账号 ID |
+| article_index | 文章序号 |
+| title | 文章标题 |
+| url | 文章链接 |
+| summary | 摘要 |
+| cover_image_url / cover_thumb_url | 封面图 URL |
+| source | 当前固定为 `biz_profile_v2` |
+
 ## 4. 使用场景
 
 1. 历史会话归档
 2. 按会话导出供后续分析
-3. 公众号当前更新监控与历史文章卡片收集
+3. 公众号当前更新监控与最近多篇文章回看
 4. 面向 AI 或搜索系统的结构化预处理
 
 ## 5. 非目标

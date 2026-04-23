@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from .contacts import load_contact_book, load_group_directory
 from .datasource import MessageDataSource, PublicArticleDataSource
-from .model import ContactDisplay, Message, OfficialAccountArticle
+from .model import ContactDisplay, Message, OfficialAccountArticle, OfficialAccountTimelineArticle
 from .parser import annotate_messages
 
 
@@ -39,6 +39,19 @@ PUBLIC_ARTICLE_HEADER = [
     "title",
     "url",
     "summary",
+]
+
+PUBLIC_ARTICLE_TIMELINE_HEADER = [
+    "timestamp",
+    "account_name",
+    "account_id",
+    "article_index",
+    "title",
+    "url",
+    "summary",
+    "cover_image_url",
+    "cover_thumb_url",
+    "source",
 ]
 
 
@@ -158,6 +171,30 @@ def export_public_articles(
     return len(articles), output_path
 
 
+def export_public_article_timeline(
+    data_dir: Path,
+    output_path: Path,
+    accounts: Optional[Sequence[str]] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    limit: Optional[int] = None,
+    output_format: str = "csv",
+) -> Tuple[int, Path]:
+    data_dir = Path(data_dir)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    datasource = PublicArticleDataSource(data_dir)
+    articles = datasource.iter_article_timeline(accounts=accounts, start=start, end=end, limit=limit)
+    if output_format == "csv":
+        _write_public_article_timeline_csv(output_path, articles)
+    elif output_format == "markdown":
+        _write_public_article_timeline_markdown(output_path, articles)
+    else:
+        raise ValueError(f"unsupported output format: {output_format}")
+    return len(articles), output_path
+
+
 def _write_csv(path: Path, messages: List[Message]) -> None:
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
@@ -194,6 +231,55 @@ def _write_public_articles_csv(path: Path, articles: List[OfficialAccountArticle
                     article.summary,
                 ]
             )
+
+
+def _write_public_article_timeline_csv(path: Path, articles: List[OfficialAccountTimelineArticle]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(PUBLIC_ARTICLE_TIMELINE_HEADER)
+        for article in articles:
+            writer.writerow(
+                [
+                    article.timestamp.isoformat(sep=" ", timespec="seconds"),
+                    article.account_name,
+                    article.account_id,
+                    article.article_index,
+                    article.title,
+                    article.url,
+                    article.summary,
+                    article.cover_image_url,
+                    article.cover_thumb_url,
+                    article.source,
+                ]
+            )
+
+
+def _write_public_article_timeline_markdown(path: Path, articles: List[OfficialAccountTimelineArticle]) -> None:
+    lines: List[str] = ["# Official account article timeline", ""]
+    current_account = ""
+    for article in articles:
+        if article.account_name != current_account:
+            if current_account:
+                lines.append("")
+            current_account = article.account_name
+            lines.append(f"## {article.account_name}")
+            lines.append("")
+        lines.append(f"### {article.title}")
+        lines.append("")
+        lines.append(f"- Time: {article.timestamp.isoformat(sep=' ', timespec='seconds')}")
+        lines.append(f"- Account: {article.account_name} ({article.account_id})")
+        if article.url:
+            lines.append(f"- URL: {article.url}")
+        if article.cover_image_url:
+            lines.append(f"- Cover: {article.cover_image_url}")
+        if article.summary:
+            lines.append("")
+            lines.append(article.summary)
+        if article.cover_image_url:
+            lines.append("")
+            lines.append(f"![{article.title}]({article.cover_image_url})")
+        lines.append("")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def _build_csv_name(talker: str, talker_display: str) -> str:
