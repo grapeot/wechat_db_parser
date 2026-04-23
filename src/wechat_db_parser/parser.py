@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import sqlite3
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
-
-import lz4.block
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .model import ContactDisplay, GroupMemberDisplay, Message
+
+lz4_block: Any = importlib.import_module("lz4.block")
 
 
 def _read_varint(data: bytes, pos: int) -> Tuple[int, int]:
@@ -124,9 +125,9 @@ def _decode_content(msg_type: int, subtype: int, str_content: Optional[str], com
         data: Optional[bytes] = None
         while size_hint <= 16 * 1024 * 1024:
             try:
-                data = lz4.block.decompress(compress_content, uncompressed_size=size_hint)
+                data = lz4_block.decompress(compress_content, uncompressed_size=size_hint)
                 break
-            except lz4.block.LZ4BlockError:
+            except lz4_block.LZ4BlockError:
                 size_hint *= 2
         if data is None:
             raw = text
@@ -155,6 +156,15 @@ def _decode_content(msg_type: int, subtype: int, str_content: Optional[str], com
     return text, raw, meta
 
 
+def decode_message_content(
+    msg_type: int,
+    subtype: int,
+    str_content: Optional[str],
+    compress_content: Optional[bytes],
+) -> Tuple[str, str, Dict[str, str]]:
+    return _decode_content(msg_type, subtype, str_content, compress_content)
+
+
 def build_message(row: sqlite3.Row) -> Message:
     (
         msgsvr_id,
@@ -178,7 +188,7 @@ def build_message(row: sqlite3.Row) -> Message:
     else:
         sender = "self" if is_sender else str_talker
 
-    text, raw, meta = _decode_content(msg_type, sub_type, str_content, compress_content)
+    text, raw, meta = decode_message_content(msg_type, sub_type, str_content, compress_content)
 
     extras: Dict[str, str] = {}
     extras.update(meta)

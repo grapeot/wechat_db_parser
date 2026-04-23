@@ -26,6 +26,19 @@ class Message:
 
 
 @dataclass
+class OfficialAccountArticle:
+    timestamp: datetime
+    account_id: str
+    account_name: str
+    title: str
+    url: str
+    summary: str
+    msg_type: int
+    sub_type: int
+    raw_content: str = ""
+
+
+@dataclass
 class ContactDisplay:
     """Contact level metadata providing multiple naming options."""
 

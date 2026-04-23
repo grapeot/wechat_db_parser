@@ -4,18 +4,35 @@
 
 ## 环境准备
 
-- 初次使用时执行 `uv venv venv && source venv/bin/activate` 创建并激活虚拟环境
-- 激活环境后安装依赖：`uv pip install -e .`
+- 初次使用时执行 `uv venv .venv && source .venv/bin/activate` 创建并激活虚拟环境
+- 激活环境后安装依赖：`uv pip install -e '.[dev]'`
 
-## 基本用法
+## CLI 概览
 
-项目提供了命令行工具 `wechat-db-export`，用于将解密后的数据库导出为 CSV。
+项目提供一个统一入口 `wechat-db-export`，通过 subcommand 区分不同导出模式。
+
+### 1. 会话全量导出
 
 ```bash
 wechat-db-export \
+  conversations \
   --data-dir /path/to/Msg \
-  --output /path/to/output \
+  --output /path/to/output_dir \
   --talkers friend_wechat_id another_friend \
+  --start 2025-01-01 \
+  --end 2025-02-01
+```
+
+### 2. 公众号文章导出
+
+`official-articles` 会优先从 `MicroMsg.db` 的 `BizSessionNewFeeds` 导出当前订阅流中的最新公众号更新；如果当前环境里只有旧数据，它会回退到 `PublicMsg.db` 的历史文章卡片。输出字段保持统一：`timestamp`、`account_name`、`account_id`、`title`、`url`、`summary`。
+
+```bash
+wechat-db-export \
+  official-articles \
+  --data-dir /path/to/Msg \
+  --output /path/to/official_articles.csv \
+  --accounts 科技早餐 量子位 \
   --start 2025-01-01 \
   --end 2025-02-01
 ```
@@ -26,7 +43,7 @@ wechat-db-export \
 PYTHONPATH=src python -m wechat_db_parser.cli --help
 ```
 
-参数说明：
+### conversations 参数说明
 
 - `--data-dir`：指向解密后 MSG 数据目录（例如 Windows 客户端导出的 `Msg/`）。
 - `--output`：CSV 导出目录，不存在时会自动创建。
@@ -35,9 +52,33 @@ PYTHONPATH=src python -m wechat_db_parser.cli --help
 - `--limit`：可选，限制每个会话的消息数量，便于调试。
 - `--workers`：可选，设置并行 worker 数，默认 1。
 
-命令执行成功后，会在终端显示各会话与导出文件的对应关系，输出 CSV 位于 `--output` 指定目录。
+### official-articles 参数说明
+
+- `--data-dir`：指向解密后的微信数据目录，支持传根目录或 `Msg/`。当前实现会优先查 `MicroMsg.db`，必要时回退到 `PublicMsg.db`。
+- `--output`：导出 CSV 的文件路径。
+- `--accounts`：可选，限定导出的公众号，支持账号 ID、名称或 `名称(账号ID)`。
+- `--start` / `--end`：可选，限制文章时间范围，接受 `YYYY-MM-DD` 或 `YYYY-MM-DDTHH:MM[:SS]` 格式。
+- `--limit`：可选，限制导出的文章条数，便于调试。
+
+命令执行成功后，`conversations` 会打印每个会话对应的 CSV 文件，`official-articles` 会打印最终 CSV 路径与文章数量。
+
+## 给 AI 助手的 repo-local skill
+
+仓库内提供了 repo-local skill：`skills/wechat_db_parser.md`。
+
+如果 AI 助手直接在本仓库里工作，让它先读取这个文件，再做导出、排查或扩展。
+
+如果你希望把这个 skill 安装到自己的本地 skill 目录，可以直接复制。下面只是一个占位示例，按你自己的 agent 约定替换即可：
+
+```bash
+mkdir -p <local-skill-dir>
+cp skills/wechat_db_parser.md <local-skill-dir>/
+```
 
 ## 注意事项
 
 - 我们只针对微信 Windows PC 版 3.9 系列数据库进行测试，其他格式（含 v4、移动端等）尚未验证。
 - 数据库结构和加密方式随微信版本变动较大，请确保你拥有合法访问和处理这些数据的权利。
+- 当前公众号最新订阅流主要来自 `MicroMsg.db / BizSessionNewFeeds`，并通过 `BizProfileV2` 补充账号 ID 与 blob 信息。
+- `PublicMsg.db / PublicNameToID` 仍然保留为历史 fallback，用于旧时间段或没有新订阅流数据的场景。
+- 对 `BizProfileV2.RespData`，当前只做保守使用：拿它补充账号信息，并尽量提取一个 `mp.weixin` 链接。更完整的多篇文章解析还需要后续单独处理。

@@ -2,6 +2,8 @@
 
 本文将完整说明 `wechat_db_parser` 项目的设计理念、关键数据表结构、消息解析流程以及扩展方向，目标是让任何工程师或 AI 助手仅凭本文即可重建当前工具并继续拓展功能。
 
+当前 CLI 已采用统一入口 + subcommand 结构。会话导出使用 `wechat-db-export conversations`，公众号文章导出使用 `wechat-db-export official-articles`。
+
 ## 1. 目录结构与输入假设
 
 解密后的微信数据通常位于某个工作目录下，本文以 `<DATA_DIR>` 表示：
@@ -27,19 +29,20 @@ wechat_db_parser/
 ├─ parser.py         # BytesExtra/LZ4 解析、消息对象构建
 ├─ model.py          # 数据模型（消息、联系人显示名等）
 ├─ exporter.py       # 汇总、写出 CSV，支持并行与昵称反解
-└─ cli.py            # 命令行入口
+└─ cli.py            # 统一命令行入口（conversations / official-articles）
 ```
 
 ### 2.1 数据模型（`model.py`）
 
 - `Message`: 统一后的消息结构，包含时间、发言者、内容、原始文本、附加元数据等。
+- `OfficialAccountArticle`: 公众号文章卡片的归一化结构，包含账号、标题、链接与摘要。
 - `ContactDisplay`: 联系人显示元数据，支持 remark/alias/nickname 优先级。
 - `GroupMemberDisplay`: 群聊内成员的群昵称、别名。
 
 ### 2.2 消息解析（`parser.py`）
 
 1. `parse_bytes_extra`：手写 protobuf 解析器，用于解码 `BytesExtra` 字段（type=1 为真实发送者，type=3/4 为媒体路径）。
-2. `_decode_content`：当消息类型为 49 时使用 `lz4.block.decompress` 解压，解析 XML 并提取标题/摘要/链接。
+2. `decode_message_content`：当消息类型为 49 时使用 `lz4.block.decompress` 解压，解析 XML 并提取标题/摘要/链接。
 3. `build_message`：将一条数据库记录转换为 `Message` 对象，补齐语音/图片/视频路径信息。
 4. `annotate_messages`：结合联系人/群成员信息，为 `talker` 和 `sender` 填充可读的显示名。
 
@@ -49,6 +52,7 @@ wechat_db_parser/
   - `_discover_message_dbs`：在 `<DATA_DIR>` 和 `<DATA_DIR>/Msg`、以及各自的 `Multi/` 目录中搜索 `MSG*.db`。
   - `list_talkers`：遍历所有消息库，从 `Name2ID`/`Name2ID_v1` 表中收集会话标识（群聊 ID 或微信号）。
   - `iter_messages`：针对某个 `talker` 按时间范围、上限条数读取消息，跨多个数据库聚合后排序。
+- `PublicArticleDataSource`：优先读取 `MicroMsg.db / BizSessionNewFeeds` 的当前订阅流，并通过 `BizProfileV2` 补充账号信息；必要时回退到 `PublicMsg.db`。
 
 ### 2.4 联系人与群昵称（`contacts.py`）
 
@@ -62,7 +66,47 @@ wechat_db_parser/
   - `--talkers` 参数既可写微信 ID，也可写备注/昵称，内部通过 `ContactDisplay` 反解成真实 ID。
   - 自动创建输出目录，文件命名为 `群名(微信ID)__哈希.csv`，避免重名。
   - CSV 字段：`timestamp`, `talker_display`, `talker_id`, `sender_display`, `sender_id`, `message_type`, `message_subtype`, `content`, `raw_content`, `extras(JSON)`。
-- CLI (`cli.py`) 提供参数解析、时间格式兼容、错误提示。
+- `export_public_articles`：优先导出 `MicroMsg.db / BizSessionNewFeeds` 中的当前订阅流；必要时回退到 `PublicMsg.db` 的历史卡片。
+- CLI (`cli.py`) 提供 `conversations` 与 `official-articles` 两个子命令，以及统一的时间格式兼容与错误提示。
+
+### 3.0 MicroMsg.db（当前公众号订阅流）
+
+从本地数据看，`PublicMsg.db` 在 2026-03-19 之后不再持续写入新的公众号文章卡片。当前最新的公众号更新主要来自 `MicroMsg.db` 的两张表：
+
+- `BizSessionNewFeeds`：每个公众号最近一条更新，适合做今天有什么新文章的扫描
+- `BizProfileV2`：每个公众号一条 profile/feed cache，`RespData` 是 protobuf blob，里面包含最近多篇文章
+
+这两张表通过 `TalkerId` 一对一 join。
+
+### 3.0.1 BizSessionNewFeeds
+
+- `TalkerId`：整型主键，可 join 到 `BizProfileV2.TalkerId`
+- `BizName`：公众号 ID，常见为 `gh_*` 或其他平台内部标识
+- `Title`：公众号名称
+- `Desc`：最新文章标题
+- `Type`：当前活跃文章推送为 `49`
+- `UnreadCount`：未读数，活跃行通常为 1
+- `UpdateTime` / `CreateTime`：最近推送时间
+- `BizAttrVersion`：版本号，每次刷新会增长
+
+### 3.0.2 BizProfileV2
+
+- `TalkerId`：整型主键
+- `UserName`：公众号 ID
+- `ArticleCount`：账号累计文章数
+- `IsSubscribed`：当前是否订阅
+- `TimeStamp`：profile/feed 缓存更新时间
+- `RespData`：protobuf blob，包含最近多篇文章的缓存结果
+- `Offset` / `IsEnd`：分页游标相关字段
+
+当前实现对 `RespData` 只做保守使用：补充账号 ID，并尽量提取一个 `mp.weixin` 链接。更完整的多篇文章解码留给后续版本。
+
+### 3.4 PublicMsg.db（旧公众号文章链路）
+
+- `PublicMsg`：旧的公众号文章卡片记录
+- `PublicNameToID`：公众号 ID 与名称映射
+- 当前观测下，这条链路在本地数据里主要覆盖到 2026-03-19 左右
+- 当前代码把这条链路保留为 fallback，便于导出更早时间段的历史文章
 
 ## 3. 关键数据表说明
 
@@ -95,10 +139,10 @@ wechat_db_parser/
   FROM ChatRoomUser AS cru
   JOIN ChatRoomUserNameToId AS chatroom ON chatroom.rowid = cru.ChatRoomId
   JOIN ChatRoomUserNameToId AS user ON user.rowid = cru.UserId
-  WHERE chatroom.UsrName = '26389512912@chatroom';
+  WHERE chatroom.UsrName = '12345678@chatroom';
   ```
 
-- 实测在“AI生产力训练营”群聊中可得到 500 个成员条目。对比消息发送者，这些成员中有 104 个从未发言（见下文“群成员覆盖与沉默用户识别”）。和 `FTSChatroom15_*` 相比，`ChatRoomUser.db` 更完整，但仍可能缺少已退出或尚未同步的成员信息，需要结合业务校验。
+- 在一个中等规模群聊样本中，可以拿到完整的成员条目。对比消息发送者后，可以进一步识别从未发言的成员。和 `FTSChatroom15_*` 相比，`ChatRoomUser.db` 更完整，但仍可能缺少已退出或尚未同步的成员信息，需要结合业务校验。
 
 ## 4. 运行流程
 
@@ -112,11 +156,19 @@ wechat_db_parser/
 5. **写出 CSV**：按 talker 写入单独的文件，附带 `extras` JSON 字段。
 6. **并行/进度条**：若安装 `tqdm`，会显示导出进度；`ThreadPoolExecutor` 可提升多会话导出速度。
 
+### 4.1 当前公众号导出流程
+
+1. 优先检查 `MicroMsg.db` 是否存在，且是否包含 `BizSessionNewFeeds`
+2. 若存在，优先从 `BizSessionNewFeeds` 读取最近文章更新
+3. 通过 `TalkerId` join `BizProfileV2`，补充 `UserName` 和 `RespData`
+4. 将 `BizSessionNewFeeds.Title` 视为公众号名称，`Desc` 视为最新文章标题，`UpdateTime` 视为时间戳
+5. 若当前订阅流无结果，再回退到 `PublicMsg.db` 的旧文章卡片链路
+
 ## 5. 群成员覆盖与沉默用户识别
 
 1. **提取成员全集**：使用上节所示 SQL 语句或等价的 Python 查询，得到目标群聊的所有成员 `wxid`。
 2. **统计发言者**：借助 `MessageDataSource.iter_messages(talker)` 获取全部消息，收集 `msg.sender`（忽略系统提示和 talker 自身）。
-3. **差集分析**：`silent = members - senders` 即为从未发言的成员。在“AI生产力训练营”样本中，500 名成员中 415 名出现过发言，剩余 104 名成员（多为仅入群未发言）可用于后续的运营分析或清理策略。
+3. **差集分析**：`silent = members - senders` 即为从未发言的成员。这个差集可用于后续的群成员活跃度分析。
 4. **注意事项**：
    - 个别消息的 `sender` 字段可能缺失（例如某些系统通知），需要跳过空值。
    - 若 `FTSContact.db` 缺少对应条目，可直接使用 `wxid` 作为显示名，或额外查询 `NameToId` / 其他联系人库补全。
@@ -126,26 +178,26 @@ wechat_db_parser/
 
 1. **支持 v4 数据库**：`message_*.db`、`contact.db` 结构不同，需要新增 datasource 实现并根据版本切换。
 2. **媒体导出**：解析 `HardLinkImage.db`、`HardLinkVideo.db`、`MediaMSG*.db`，将图片/视频复制到输出目录。
-3. **索引缓存**：为大型数据库构建 FTS 或倒排索引，提供按关键词检索功能。
+3. **BizProfileV2 深度解码**：把 `RespData` 中最近多篇文章完整解出来，而不是只用 `BizSessionNewFeeds` 的最新一篇。
 4. **增量更新**：比较数据库 fingerprint，仅导出新增消息。
 5. **HTTP/GUI 封装**：在 CLI 基础上提供简易 Web 服务或图形界面。
 6. **多格式导出**：未来可新增 JSON/Parquet/SQLite 等格式，或直接生成统计报表。
 
 ## 7. 重建步骤速览
 
-1. 安装依赖：`pip install lz4 protobuf tqdm`。
+1. 安装依赖：`uv venv .venv && source .venv/bin/activate && uv pip install -e '.[dev]'`。
 2. 创建与本文一致的目录结构，将源码放入 `wechat_db_parser/src/wechat_db_parser/`。
-3. 设置 `PYTHONPATH=wechat_db_parser/src`，使用 `python -m wechat_db_parser.cli` 执行。
+3. 设置 `PYTHONPATH=wechat_db_parser/src`，使用 `python -m wechat_db_parser.cli conversations` 或 `python -m wechat_db_parser.cli official-articles` 执行。
 4. 传入解密目录与输出目录，使用 `--limit` 做小规模测试。
 
 示例：
 
 ```bash
-source venv/bin/activate
-PYTHONPATH=wechat_db_parser/src python -m wechat_db_parser.cli \
+source .venv/bin/activate
+PYTHONPATH=wechat_db_parser/src python -m wechat_db_parser.cli conversations \
   --data-dir Msg \
   --output out \
-  --talkers 原ZWO天文摄影③群（元老群） \
+  --talkers sample_group \
   --limit 10
 ```
 

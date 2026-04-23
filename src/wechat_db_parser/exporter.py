@@ -14,8 +14,8 @@ except ImportError:  # pragma: no cover - optional dependency
     tqdm = None  # type: ignore
 
 from .contacts import load_contact_book, load_group_directory
-from .datasource import MessageDataSource
-from .model import ContactDisplay, Message
+from .datasource import MessageDataSource, PublicArticleDataSource
+from .model import ContactDisplay, Message, OfficialAccountArticle
 from .parser import annotate_messages
 
 
@@ -30,6 +30,15 @@ EXPORT_HEADER = [
     "content",
     "raw_content",
     "extras",
+]
+
+PUBLIC_ARTICLE_HEADER = [
+    "timestamp",
+    "account_name",
+    "account_id",
+    "title",
+    "url",
+    "summary",
 ]
 
 
@@ -71,7 +80,7 @@ def export_conversations(
 
     def process(talker: str) -> Optional[Tuple[str, Path]]:
         messages = datasource.iter_messages(
-            talker=talker, start=start, end=end, limit=limit
+            talker=talker, start=start, end=end, limit=limit, workers=workers
         )
         if not messages:
             return None
@@ -83,17 +92,21 @@ def export_conversations(
 
     results: List[Tuple[str, Path]] = []
 
-    iterator: Iterable[str] = all_talkers
-    progress = tqdm(iterator, desc="Exporting", unit="talker") if tqdm else iterator
+    progress = tqdm(all_talkers, desc="Exporting", unit="talker") if tqdm else None
+    iterator: Iterable[str]
+    if progress is not None:
+        iterator = progress
+    else:
+        iterator = all_talkers
 
     if workers <= 1:
-        for talker in progress:
+        for talker in iterator:
             try:
                 result = process(talker)
                 if result:
                     results.append(result)
             except Exception as exc:  # pragma: no cover - focus on robustness
-                if tqdm:
+                if progress is not None:
                     progress.write(f"[WARN] Failed to export {talker}: {exc}")
                 else:
                     print(f"[WARN] Failed to export {talker}: {exc}")
@@ -121,10 +134,28 @@ def export_conversations(
                     except Exception as exc:
                         print(f"[WARN] Failed to export {talker}: {exc}")
 
-    if tqdm:
+    if progress is not None:
         progress.close()
 
     return results
+
+
+def export_public_articles(
+    data_dir: Path,
+    output_path: Path,
+    accounts: Optional[Sequence[str]] = None,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    limit: Optional[int] = None,
+) -> Tuple[int, Path]:
+    data_dir = Path(data_dir)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    datasource = PublicArticleDataSource(data_dir)
+    articles = datasource.iter_articles(accounts=accounts, start=start, end=end, limit=limit)
+    _write_public_articles_csv(output_path, articles)
+    return len(articles), output_path
 
 
 def _write_csv(path: Path, messages: List[Message]) -> None:
@@ -144,6 +175,23 @@ def _write_csv(path: Path, messages: List[Message]) -> None:
                     msg.content,
                     msg.raw_content,
                     json.dumps(msg.extras, ensure_ascii=False) if msg.extras else "",
+                ]
+            )
+
+
+def _write_public_articles_csv(path: Path, articles: List[OfficialAccountArticle]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(PUBLIC_ARTICLE_HEADER)
+        for article in articles:
+            writer.writerow(
+                [
+                    article.timestamp.isoformat(sep=" ", timespec="seconds"),
+                    article.account_name,
+                    article.account_id,
+                    article.title,
+                    article.url,
+                    article.summary,
                 ]
             )
 
