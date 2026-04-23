@@ -37,6 +37,20 @@ wechat-db-export \
   --end 2025-02-01
 ```
 
+### 3. 公众号文章时间线导出
+
+`official-articles-timeline` 直接解析 `BizProfileV2.RespData`，按文章级别导出最近多篇内容，适合做时间线回看或 Markdown 归档。
+
+```bash
+wechat-db-export \
+  official-articles-timeline \
+  --data-dir /path/to/Msg \
+  --output /path/to/official_articles_timeline.md \
+  --accounts GeekPark \
+  --limit 3 \
+  --format markdown
+```
+
 如果希望从源代码目录直接调用模块，也可以使用：
 
 ```bash
@@ -60,7 +74,16 @@ PYTHONPATH=src python -m wechat_db_parser.cli --help
 - `--start` / `--end`：可选，限制文章时间范围，接受 `YYYY-MM-DD` 或 `YYYY-MM-DDTHH:MM[:SS]` 格式。
 - `--limit`：可选，限制导出的文章条数，便于调试。
 
-命令执行成功后，`conversations` 会打印每个会话对应的 CSV 文件，`official-articles` 会打印最终 CSV 路径与文章数量。
+### official-articles-timeline 参数说明
+
+- `--data-dir`：指向解密后的微信数据目录，当前要求存在 `MicroMsg.db / BizProfileV2`。
+- `--output`：导出文件路径，可以是 CSV 或 Markdown。
+- `--accounts`：可选，限定导出的公众号，支持账号 ID、名称或 `名称(账号ID)`。
+- `--start` / `--end`：可选，限制文章时间范围。
+- `--limit`：可选，限制导出的文章条数，便于调试。
+- `--format`：`csv` 或 `markdown`。
+
+命令执行成功后，`conversations` 会打印每个会话对应的 CSV 文件，`official-articles` 和 `official-articles-timeline` 会打印最终文件路径与文章数量。
 
 ## 给 AI 助手的 repo-local skill
 
@@ -81,4 +104,4 @@ cp skills/wechat_db_parser.md <local-skill-dir>/
 - 数据库结构和加密方式随微信版本变动较大，请确保你拥有合法访问和处理这些数据的权利。
 - 当前公众号最新订阅流主要来自 `MicroMsg.db / BizSessionNewFeeds`，并通过 `BizProfileV2` 补充账号 ID 与 blob 信息。
 - `PublicMsg.db / PublicNameToID` 仍然保留为历史 fallback，用于旧时间段或没有新订阅流数据的场景。
-- 对 `BizProfileV2.RespData`，当前只做保守使用：拿它补充账号信息，并尽量提取一个 `mp.weixin` 链接。更完整的多篇文章解析还需要后续单独处理。
+- `official-articles-timeline` 已经能从 `BizProfileV2.RespData` 中抽出最近多篇文章的标题、链接、时间和封面图 URL，并支持 Markdown 输出。

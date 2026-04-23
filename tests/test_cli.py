@@ -53,7 +53,7 @@ def test_main_routes_official_articles_subcommand(monkeypatch, capsys) -> None:
             "--output",
             "articles.csv",
             "--accounts",
-            "科技早餐",
+            "Tech Breakfast",
             "--start",
             "2026-03-01",
             "--end",
@@ -67,9 +67,57 @@ def test_main_routes_official_articles_subcommand(monkeypatch, capsys) -> None:
     assert captured == {
         "data_dir": Path("Msg"),
         "output_path": Path("articles.csv"),
-        "accounts": ["科技早餐"],
+        "accounts": ["Tech Breakfast"],
         "start": cli.parse_date("2026-03-01"),
         "end": cli.parse_date("2026-03-02T12:00"),
         "limit": 5,
     }
     assert "成功导出 1 条公众号文章 -> articles.csv" in capsys.readouterr().out
+
+
+def test_main_routes_official_articles_timeline_subcommand(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_export_public_article_timeline(data_dir, output_path, accounts, start, end, limit, output_format):
+        captured["data_dir"] = data_dir
+        captured["output_path"] = output_path
+        captured["accounts"] = accounts
+        captured["start"] = start
+        captured["end"] = end
+        captured["limit"] = limit
+        captured["output_format"] = output_format
+        return 3, output_path
+
+    monkeypatch.setattr(cli, "export_public_article_timeline", fake_export_public_article_timeline)
+
+    exit_code = cli.main(
+        [
+            "official-articles-timeline",
+            "--data-dir",
+            "Msg",
+            "--output",
+            "timeline.md",
+            "--accounts",
+            "GeekPark",
+            "--start",
+            "2026-03-01",
+            "--end",
+            "2026-03-02T12:00",
+            "--limit",
+            "3",
+            "--format",
+            "markdown",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured == {
+        "data_dir": Path("Msg"),
+        "output_path": Path("timeline.md"),
+        "accounts": ["GeekPark"],
+        "start": cli.parse_date("2026-03-01"),
+        "end": cli.parse_date("2026-03-02T12:00"),
+        "limit": 3,
+        "output_format": "markdown",
+    }
+    assert "Successfully exported 3 official account timeline articles -> timeline.md" in capsys.readouterr().out

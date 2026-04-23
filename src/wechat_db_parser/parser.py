@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from .model import ContactDisplay, GroupMemberDisplay, Message
+from .model import ContactDisplay, GroupMemberDisplay, Message, OfficialAccountTimelineArticle
 
 lz4_block: Any = importlib.import_module("lz4.block")
 
@@ -37,6 +37,124 @@ def _skip_field(wire_type: int, data: bytes, pos: int) -> int:
     if wire_type == 5:  # 32-bit
         return pos + 4
     raise ValueError(f"unsupported wire type {wire_type}")
+
+
+def _read_fixed64(data: bytes, pos: int) -> Tuple[int, int]:
+    if pos + 8 > len(data):
+        raise ValueError("truncated fixed64")
+    return int.from_bytes(data[pos : pos + 8], "little"), pos + 8
+
+
+def _read_fixed32(data: bytes, pos: int) -> Tuple[int, int]:
+    if pos + 4 > len(data):
+        raise ValueError("truncated fixed32")
+    return int.from_bytes(data[pos : pos + 4], "little"), pos + 4
+
+
+def parse_proto_message(blob: Optional[bytes]) -> Dict[int, List[Any]]:
+    if not blob:
+        return {}
+
+    pos = 0
+    fields: Dict[int, List[Any]] = {}
+    while pos < len(blob):
+        tag, pos = _read_varint(blob, pos)
+        field = tag >> 3
+        wire = tag & 7
+        if wire == 0:
+            value, pos = _read_varint(blob, pos)
+        elif wire == 1:
+            value, pos = _read_fixed64(blob, pos)
+        elif wire == 2:
+            length, pos = _read_varint(blob, pos)
+            value = blob[pos : pos + length]
+            pos += length
+        elif wire == 5:
+            value, pos = _read_fixed32(blob, pos)
+        else:
+            raise ValueError(f"unsupported wire type {wire}")
+        fields.setdefault(field, []).append(value)
+    return fields
+
+
+def _first_varint(message: Dict[int, List[Any]], field: int) -> int:
+    values = message.get(field, [])
+    if not values:
+        return 0
+    value = values[0]
+    return int(value) if isinstance(value, int) else 0
+
+
+def _first_text(message: Dict[int, List[Any]], field: int) -> str:
+    values = message.get(field, [])
+    if not values:
+        return ""
+    value = values[0]
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore").strip()
+    return str(value).strip()
+
+
+def _first_bytes(message: Dict[int, List[Any]], field: int) -> Optional[bytes]:
+    values = message.get(field, [])
+    if not values:
+        return None
+    value = values[0]
+    return value if isinstance(value, bytes) else None
+
+
+def _all_bytes(message: Dict[int, List[Any]], field: int) -> List[bytes]:
+    values = message.get(field, [])
+    return [value for value in values if isinstance(value, bytes)]
+
+
+def parse_biz_profile_resp_data(
+    blob: Optional[bytes],
+    *,
+    account_id: str,
+    account_name: str,
+) -> List[OfficialAccountTimelineArticle]:
+    root = parse_proto_message(blob)
+    feed_blob = _first_bytes(root, 4)
+    if not feed_blob:
+        return []
+    feed = parse_proto_message(feed_blob)
+    articles: List[OfficialAccountTimelineArticle] = []
+    for item_blob in _all_bytes(feed, 1):
+        item = parse_proto_message(item_blob)
+        envelope = parse_proto_message(_first_bytes(item, 6))
+        if not envelope:
+            continue
+        time_meta = parse_proto_message(_first_bytes(envelope, 1))
+        content_meta = parse_proto_message(_first_bytes(envelope, 2))
+        title = _first_text(content_meta, 1)
+        if not title:
+            continue
+        summary = _first_text(content_meta, 3)
+        url = _first_text(content_meta, 5)
+        cover_image_url = _first_text(content_meta, 7) or _first_text(content_meta, 9) or _first_text(content_meta, 32)
+        cover_thumb_url = _first_text(content_meta, 8) or _first_text(content_meta, 33)
+        timestamp_value = _first_varint(time_meta, 3) or _first_varint(time_meta, 2)
+        if not timestamp_value:
+            continue
+        article_index = _first_varint(time_meta, 4)
+        articles.append(
+            OfficialAccountTimelineArticle(
+                timestamp=datetime.fromtimestamp(timestamp_value),
+                account_id=account_id,
+                account_name=account_name,
+                title=title,
+                url=url,
+                summary=summary,
+                cover_image_url=cover_image_url,
+                cover_thumb_url=cover_thumb_url,
+                article_index=article_index,
+                source="biz_profile_v2",
+                raw_content=(blob or b"").decode("utf-8", errors="ignore"),
+            )
+        )
+    articles.sort(key=lambda article: (article.timestamp, article.article_index))
+    return articles
 
 
 def parse_bytes_extra(blob: Optional[bytes]) -> Dict[int, str]:

@@ -39,6 +39,21 @@ class OfficialAccountArticle:
 
 
 @dataclass
+class OfficialAccountTimelineArticle:
+    timestamp: datetime
+    account_id: str
+    account_name: str
+    title: str
+    url: str
+    summary: str
+    cover_image_url: str = ""
+    cover_thumb_url: str = ""
+    article_index: int = 0
+    source: str = ""
+    raw_content: str = ""
+
+
+@dataclass
 class ContactDisplay:
     """Contact level metadata providing multiple naming options."""
 
