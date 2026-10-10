@@ -85,6 +85,25 @@ PYTHONPATH=src python -m wechat_db_parser.cli --help
 
 命令执行成功后，`conversations` 会打印每个会话对应的 CSV 文件，`official-articles` 和 `official-articles-timeline` 会打印最终文件路径与文章数量。
 
+## 群沉默成员扫描（独立脚本）
+
+`scripts/performance_improvement_plan.py` 是一个独立脚本（不在 `wechat-db-export` 子命令里），用来找出「过去 N 天从未发言」的群成员，并给出每人已沉默多久。
+
+```bash
+python scripts/performance_improvement_plan.py \
+  --data-dir Msg \
+  --talker 12345678901@chatroom \
+  --past-days 365 \
+  --output /path/to/silent_members.csv
+```
+
+- `--talker`：群名/备注或 `xxx@chatroom` ID。
+- `--past-days`：统计窗口，默认 365。
+- `--limit`：终端预览条数，默认 20（CSV 不受影响）。
+- `--output`：可选，导出完整名单；建议写到仓库外或已忽略的 `output/` 目录。
+
+输出两列（沉默时长、显示名）加判定依据，CSV 列为 `silence_duration,display_name,member_id,basis`。判定依据分三种：`最后发言`（窗口外发过言，距今按最后一次发言算）、`入群时间(推断)`（从未发言，按入群系统消息推断）、`无入群记录(下界)`（从未发言且无可归因入群记录，只给下界）。「发言」排除 type=10000 系统消息（入群/撤回/拍一拍）。脚本只打印显示名与时长，不打印消息正文。
+
 ## 给 AI 助手的 repo-local skill
 
 仓库内提供了 repo-local skill：`skills/wechat_db_parser.md`。
